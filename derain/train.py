@@ -50,6 +50,8 @@ def main():
     p.add_argument("--log-every", type=int, default=100)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--resume", help="resume from last.pt")
+    p.add_argument("--converge", action="store_true",
+                   help="stop on convergence: lr below 1/4 of initial and the mean val PSNR of the last 5 evaluations improved <0.1 dB over the 5 evaluations 20k iters earlier; writes converged.txt and exits")
     p.add_argument("--out", required=True)
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     args = p.parse_args()
@@ -76,6 +78,7 @@ def main():
         opt.load_state_dict(ck["optimizer"])
         sched.load_state_dict(ck["scheduler"])
         start_iter, best = ck["iter"], ck["best_psnr"]
+        sched.T_max = args.iters  # when resuming an old checkpoint, reset the cosine period to the new total iters
 
     train_pairs = find_pairs(args.train_root)
     val_pairs = find_pairs(args.val_root)
@@ -138,6 +141,16 @@ def main():
             log.writerow([it, "", lr, round(s["psnr"], 3), round(s["ssim"], 4), round(time.time() - t0, 1)])
             log_f.flush()
             print(f"[{it}] val PSNR {s['psnr']:.3f} dB  SSIM {s['ssim']:.4f}  (best {best:.3f})")
+            if args.converge and lr <= 0.25 * args.lr:
+                log_f.flush()
+                with open(out / "log.csv", encoding="utf-8") as rf:
+                    vals = [float(r[3]) for r in csv.reader(rf) if len(r) > 3 and r[3] not in ("", "val_psnr")]
+                if len(vals) >= 10:
+                    a, b = sum(vals[-5:]) / 5, sum(vals[-15:-10]) / 5 if len(vals) >= 15 else None
+                    if b is not None and a - b < 0.1:
+                        (out / "converged.txt").write_text(f"iter {it}  last-5 mean {a:.3f} dB, 20k earlier {b:.3f} dB\n")
+                        print(f"[{it}] converged, stopping early")
+                        break
     log_f.close()
 
 
