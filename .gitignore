@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# 資料集與訓練產物（太大，不進 git）
+data/
+datasets/
+checkpoints/
+runs/
+outputs/
+results/
+*.pth
+*.pt
+*.ckpt
+*.onnx
+
+# handoff zip 跟 handoff/ 內容重複
+*.zip
+
+.env

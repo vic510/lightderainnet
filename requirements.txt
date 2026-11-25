@@ -1,0 +1,4 @@
+# PyTorch 請依 GPU 驅動安裝 CUDA 版（見 README），這裡只列其他套件
+numpy
+opencv-python
+onnx
