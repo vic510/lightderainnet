@@ -1,7 +1,6 @@
 # 去雨實驗程式（GPU 加速專題）
 
 影像去雨（derain）的 PyTorch 實驗程式：自建輕量模型訓練、知識蒸餾、PSNR/SSIM 評估、模型延遲量測、完整影片流程量測，以及 ONNX/TensorRT 匯出。
-訓練、PSNR/SSIM 評估、模型延遲量測、完整影片流程量測，以及 ONNX/TensorRT 匯出。
 所有結果都會連同硬體與軟體版本，自動寫進 `results/*.jsonl`，之後可以追溯。
 
 ## 安裝
