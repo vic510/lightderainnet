@@ -4,6 +4,6 @@ title: "LightDerainNet: A Single Lightweight Model for Real-Time Rain and Haze R
 type: software
 authors:
   - alias: "vic510"
-repository-code: "https://github.com/vic510/derain"
+repository-code: "https://github.com/vic510/lightderainnet"
 license: MIT
 date-released: "2026-11-25"

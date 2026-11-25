@@ -139,7 +139,7 @@ BibTeX: [references.bib](references.bib).
   title  = {LightDerainNet: A Single Lightweight Model for Real-Time Rain and Haze Removal},
   author = {vic510},
   year   = {2026},
-  url    = {https://github.com/vic510/derain}
+  url    = {https://github.com/vic510/lightderainnet}
 }
 ```
 
