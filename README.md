@@ -1,146 +1,146 @@
-# Derain: One Lightweight Model for Rain and Haze Removal
+# LightDerainNet: A Single Lightweight Model for Real-Time Rain and Haze Removal
 
-PyTorch experiment code for real-time image deraining/dehazing on edge-class GPUs (university capstone project): training a lightweight model, knowledge distillation, PSNR/SSIM evaluation, model latency benchmarking, full video-pipeline measurement, and ONNX/TensorRT export. Every result is written to `results/*.jsonl` together with hardware and software versions, so it stays traceable.
+**Technical report and reference implementation** · University capstone project (GPU-accelerated adverse-weather image restoration)
 
+[Abstract](#abstract) · [1 Introduction](#1-introduction) · [2 Method](#2-method) · [3 Experimental setup](#3-experimental-setup) · [4 Results](#4-results) · [5 Limitations](#5-limitations) · [6 Reproducibility](#6-reproducibility) · [References](#references) · [Citation](#citation)
 
-## Highlights
+## Abstract
 
-**LightDerainNet** is a 0.55M-parameter, non-GAN, U-shaped residual CNN that removes rain **and** haze with a single model and runs a 720p frame in **8.2 ms** (FP16, NVIDIA GB10, batch 1).
+Rain and haze often occur together in the scenes seen by autonomous vehicles and edge devices, yet most restoration networks are either large Transformer/diffusion models (tens of millions of parameters, hundreds of milliseconds per frame) or specialize in a single degradation. We present **LightDerainNet**, a 0.55M-parameter, non-GAN, U-shaped residual CNN that predicts the rain/haze layer at half resolution and removes both degradations with one model. Trained on a mixture of Rain13K and Outdoor-Rain, it processes a 720p frame in **8.2 ms** (FP16, NVIDIA GB10), about 130-140x faster and 14-44x smaller than WGWS-Net and WeatherRemover. On rain+haze images it improves downstream detection (YOLO11s, mAP50 relative to detection on clean images) from 0.395 to **0.858**, and it remains usable on rain-only benchmarks (Rain100L 31.10 dB, Rain100H 26.94 dB), where specialist large models are strong only on their home test set. We also report a negative result: the model has no pure-dehazing ability on RESIDE-6K, which we trace to the absence of atmospheric-scattering haze in the training data.
 
-![architecture](docs/architecture.png)
+## 1 Introduction
 
-- Why it is fast: `PixelUnshuffle` drops the work to 1/2 resolution (about 1/4 of the compute), the bottleneck runs at 1/4 resolution, and the network predicts the rain/haze layer `R` (`B = x - R`). No attention or Transformer blocks.
-- Why one model: real weather often has rain and haze together. Cascading a derainer and a dehazer doubles latency and, in our tests, was also less accurate.
-- Width and depth are adjustable, which enables structural-compression experiments (w32 -> w16, optional knowledge distillation from the w32 teacher).
+Adverse weather degrades perception: rain streaks occlude detail, haze lowers contrast, and both break downstream detection. Deployment on vehicles and edge devices requires models that are **small** and **real-time**. Existing multi-weather restorers [10, 9, 11] reach high quality but cost 7-38M parameters and, on our hardware, 54-1127 ms per 720p frame; deraining and dehazing are usually separate models [7, 12], so cascading them doubles latency.
 
-## Results
+Contributions:
 
-Test sets: **Outdoor-Rain Test1** (750 rain+haze images), **Rain100L/H** (rain only), **RESIDE-6K test** (haze only, 848 pairs). Latency is 720p, batch 1, measured on the same machine for every model. PSNR/SSIM are on the Y channel after 8-bit quantization. The main metric is downstream detection **mAP50**: YOLO11s detections on the clean ground truth act as pseudo-labels, so mAP50 measures how close detection on the restored image is to detection on the clean image (it is a relative metric, not an absolute mAP against human labels).
+1. **LightDerainNet**, a 0.55M-parameter residual CNN that handles rain, haze and rain+haze with one forward pass (Section 2).
+2. A **mixed-data training recipe** (Rain13K + Outdoor-Rain, 22,711 pairs) that avoids the single-domain failure modes we measured (Section 4.2).
+3. A **same-machine, same-metric comparison** with Restormer, TransWeather, WGWS-Net, WeatherRemover, AOD-Net and UCL-Dehaze, including a downstream-detection metric (Section 4.1) and cascade baselines (Section 4.3).
+4. An honest account of **where the model fails** (pure haze, Section 5) and of the threats to validity of the comparison.
 
-**Rain and rain+haze models** (official weights unless marked; training data differs between models, so the differences include data distribution, not only architecture):
+## 2 Method
+
+![LightDerainNet architecture](docs/architecture.png)
+
+LightDerainNet (`derain/models.py`) is a U-shaped residual CNN with no attention or Transformer blocks:
+
+- **Resolution reduction.** `PixelUnshuffle x2` maps `3xHxW` to `12xH/2xW/2`, so all convolutions run at half resolution (about 1/4 of the compute); `PixelShuffle x2` restores the output. A strided convolution reaches 1/4 resolution for the bottleneck.
+- **Residual learning.** The network predicts the weather layer `R` and outputs `B = x - R`, the usual formulation in deraining CNNs [4, 6].
+- **Blocks.** Standard residual blocks [2] (Conv3x3-ReLU-Conv3x3 + identity), 2 in the encoder, 6 in the bottleneck (width 2w), 2 in the decoder, with one skip connection as in U-Net [1]. About 80% of the 0.55M parameters sit in the bottleneck.
+- **Scalability.** Width `w` and depth are adjustable; `w16` (140K parameters) is trained with optional knowledge distillation from `w32` [5] for structural-compression experiments.
+- **Loss.** `L1 + 0.1 (1 - SSIM)`; mixed precision optional (`--amp`).
+
+The components are standard; the contribution is their combination for the real-time constraint, not a new building block.
+
+## 3 Experimental setup
+
+| Item | Setting |
+|---|---|
+| Training data | **Mixed**: Rain13K [15] + Outdoor-Rain [16] (22,711 pairs); baselines: Rain13K only, Outdoor-Rain only |
+| Schedule | 300k iterations, batch 16, patch 128, lr 2e-4 cosine; seed 0 |
+| Rain test sets | Rain100L/H [13] (rain only); Outdoor-Rain Test1 [16] (750 images, rain+haze) |
+| Haze test set | RESIDE-6K test [17] (848 pairs, synthetic haze) |
+| Quality metrics | PSNR/SSIM on Y channel, 8-bit quantized [18] |
+| Task metric | Downstream detection mAP50 with YOLO11s [19] on pseudo-labels from clean images (relative metric) |
+| Latency | 720p, batch 1, FP16, one machine (NVIDIA GB10) for all models; WGWS-Net FP32-only |
+
+Full definitions and the threats to validity are in [docs/protocol.md](docs/protocol.md).
+
+## 4 Results
+
+### 4.1 Comparison with large rain and rain+haze models
+
+Official weights unless marked. **Training data differ between rows**, so the differences mix architecture and data distribution (Section 5).
 
 | Model | Params | 720p latency | Outdoor-Rain mAP50 / PSNR / SSIM | Rain100L PSNR | Rain100H PSNR |
 |---|---|---|---|---|---|
-| WGWS-Net Setting1 | 7.58M | 1127 ms (FP32) | **0.940** / 30.60 / 0.932 | 23.64 | 14.94 |
-| WeatherRemover (outdoor_rain) | 24.3M | 1094 ms | **0.953** / 24.99 / 0.909 | 23.20 | 20.87 |
-| Restormer (Rain13K) | 26.1M | 1010 ms | 0.728 / 15.14 / 0.637 | **39.08** | **31.47** |
-| TransWeather (retrained on our mixed data, 100k iters) | 38.1M | 54 ms | 0.789 / 25.56 / 0.850 | 28.93 | 25.35 |
+| WGWS-Net Setting1 [10] | 7.58M | 1127 ms (FP32) | **0.940** / 30.60 / 0.932 | 23.64 | 14.94 |
+| WeatherRemover (outdoor_rain) [11] | 24.3M | 1094 ms | **0.953** / 24.99 / 0.909 | 23.20 | 20.87 |
+| Restormer (Rain13K) [8] | 26.1M | 1010 ms | 0.728 / 15.14 / 0.637 | **39.08** | **31.47** |
+| TransWeather, retrained on our mixed data (100k) [9] | 38.1M | 54 ms | 0.789 / 25.56 / 0.850 | 28.93 | 25.35 |
 | **LightDerainNet w32, mixed 300k (ours)** | **0.55M** | **8.2 ms** | 0.858 / 27.64 / 0.890 | 31.10 | 26.94 |
 
-- Each large model wins on its home test set (WGWS-Net/WeatherRemover on Outdoor-Rain, Restormer on Rain100L/H), but only on that one: Restormer reaches 15.14 dB on rain+haze, WGWS-Net 14.94 dB on heavy rain, WeatherRemover is 8 dB below ours on Rain100L. LightDerainNet is usable on all three.
-- Cost: about 140x faster and 14x smaller than WGWS-Net; about 130x faster and 44x smaller than WeatherRemover.
-- Against TransWeather retrained on the same data, ours has 1/69 of the parameters and is about 6.6x faster with equal mAP50 and slightly better PSNR.
+(Machine-readable: [results/main_results.csv](results/main_results.csv).)
 
-![visual comparison](docs/visual_comparison.jpg)
+- Each large model wins on its home test set but only there: Restormer reaches 15.14 dB on rain+haze, WGWS-Net 14.94 dB on heavy rain, WeatherRemover is 8 dB below ours on Rain100L. LightDerainNet is usable on all three.
+- Against TransWeather retrained on identical data, ours uses 1/69 of the parameters, runs about 6.6x faster, with equal mAP50 and slightly better PSNR.
 
-**Why a single mixed-data model.** Trained only on Rain13K, w32 barely helps on rain+haze (15.15 dB vs 14.46 dB input). Trained only on Outdoor-Rain, it drops to 20.44 dB on Rain100L. Training on Rain13K + Outdoor-Rain (22,711 pairs) covers both: detection mAP50 on Outdoor-Rain goes from 0.395 (rainy input) to **0.858** (recall 0.831). w48 gave similar quality at 16.7 ms, so w32 was kept.
+![Visual comparison on Outdoor-Rain Test1](docs/visual_comparison.jpg)
 
-**Cascades are worse.** Deraining (w32/w16) followed by a dehazing model (AOD-Net or UCL-Dehaze) reaches mAP50 0.727/0.690 vs 0.858 for the single model; cascading UCL-Dehaze (GAN) is also about 24x slower (199 ms vs 8.2 ms).
+### 4.2 Why mixed-data training
 
-**Pure-haze limitation (honest result).** On RESIDE-6K (input 14.92 dB / 0.818) the model has no dehazing ability: 14.47 dB / 0.783, 0.5 dB below the input and about 6.7 dB below AOD-Net (21.13) and UCL-Dehaze (21.32). On rain+haze they are far behind (mAP50 0.407 / 0.384 vs 0.858) because they do not remove rain streaks. A likely cause (not yet verified) is that the training haze is the thin haze attached to rainy scenes, not atmospheric-scattering haze; adding RESIDE training data is the next step.
+| Training data (w32) | Outdoor-Rain PSNR | Rain100L PSNR | Outdoor-Rain mAP50 |
+|---|---|---|---|
+| Rain13K only | 15.15 (input 14.46) | 32.32 | 0.395 (rainy input) |
+| Outdoor-Rain only (100k) | 27.33 | 20.44 (worse than input) | n/a |
+| **Rain13K + Outdoor-Rain (300k)** | 27.64 | 31.10 | **0.858** (recall 0.831) |
 
-**Rain-only baseline (Rain13K, w32, 100k iters, about 31 minutes):** above 30 dB on Rain100L, Test1200 and Test2800; below on Rain100H and Test100. SSIM: Rain100L 0.940, Rain100H 0.847, Test100 0.863, Test1200 0.901, Test2800 0.926. GPU acceleration alone (no model change) takes 720p from about 300 ms on CPU to single-digit ms with FP16 and cuDNN, with PSNR changes below 0.002 dB.
+A single-domain model fails on the other domain; the mixture covers both. `w48` matched `w32` in quality at 16.7 ms and was not adopted.
 
-Structural compression (kept as a side experiment): w16 has 1/4 of the parameters (140K) and 1/3.9 of the GFLOPs; PSNR drops by 0.2-2 dB, and distillation from w32 helps mainly on Rain100L (+0.4 dB).
+### 4.3 Cascades and rain-only baseline
 
-## Roadmap
+- **Cascades are worse and slower.** Deraining (w32/w16) followed by AOD-Net or UCL-Dehaze reaches mAP50 0.727 / 0.690 vs 0.858 for the single model; cascading UCL-Dehaze (GAN) is also about 24x slower (199 ms vs 8.2 ms).
+- **Rain-only baseline** (Rain13K, w32, 100k iterations, about 31 minutes): above 30 dB on Rain100L, Test1200 and Test2800; below on Rain100H and Test100. SSIM: 0.940 / 0.847 / 0.863 / 0.901 / 0.926 (Rain100L / Rain100H / Test100 / Test1200 / Test2800).
+- **GPU acceleration** without changing the model takes 720p from about 300 ms on CPU to single-digit milliseconds (FP16, cuDNN); PSNR changes by less than 0.002 dB.
+- **Compression** (side experiment): `w16` has 1/4 of the parameters and 1/3.9 of the GFLOPs; PSNR drops 0.2-2 dB, and distillation from `w32` helps mainly on Rain100L (+0.4 dB).
 
-- Add pure-haze data (RESIDE-6K train) to the mixed training set and re-test on RESIDE-6K.
-- Train the remaining baselines (Restormer, WGWS-Net) on the same data to convergence for a fair same-data comparison.
-- Measure the end-to-end video pipeline latency, TensorRT FP16/INT8, and a low-end GPU (RTX 3050 4 GB); add DRSformer; multi-seed distillation runs.
+## 5 Limitations
 
-## Install
+- **No pure-haze ability.** On RESIDE-6K (input 14.92 dB / 0.818) the model scores 14.47 dB / 0.783, 0.5 dB *below* the input and about 6.7 dB below AOD-Net (21.13) and UCL-Dehaze (21.32). On rain+haze those models are far behind (mAP50 0.407 / 0.384 vs 0.858) because they do not remove streaks ([results/haze_results.csv](results/haze_results.csv)). We hypothesize, but have not verified, that the training haze is the thin haze attached to rainy scenes rather than atmospheric-scattering haze.
+- **Unequal training data** across the official-weight baselines; only TransWeather and our models share data. A converged same-data comparison of all baselines is not yet available (30k-iteration retraining was discarded because the large models had not converged).
+- **Relative detection metric** based on pseudo-labels from a detector; not an absolute accuracy against human annotations.
+- Single seed; no confidence intervals.
 
-```bash
-python3 -m venv .venv && source .venv/bin/activate
-pip install torch --index-url https://download.pytorch.org/whl/cu130   # adjust to your CUDA version
-pip install -r requirements.txt
+## 6 Reproducibility
+
+- Install, dataset download, commands for every experiment: [REPRODUCE.md](REPRODUCE.md).
+- Measurement rules and metric definitions: [docs/protocol.md](docs/protocol.md).
+- Every run appends to `results/*.jsonl` with hardware and software versions.
+- Datasets, weights and third-party code are **not** included. Rain13K comes from an unofficial Hugging Face mirror (license unknown): academic use only, cite the original papers. External models are loaded from their official repositories.
+
+```
+derain/        model, data, metrics, training, evaluation, benchmark, video pipeline, ONNX export
+tools/         downstream detection, external-model comparison, haze/cascade evaluation, figures
+docs/          architecture diagram, comparison figure, evaluation protocol
+results/       result tables (CSV)
 ```
 
-Training takes a long time; use `tmux` or `nohup`:
+**Roadmap:** add pure-haze data (RESIDE-6K train) and re-test on RESIDE-6K; converged same-data retraining of Restormer and WGWS-Net; end-to-end video latency, TensorRT FP16/INT8, a low-end GPU (RTX 3050 4 GB), DRSformer, multi-seed distillation.
 
-```bash
-nohup python -m derain.train ... --out runs/light32 > runs/light32.log 2>&1 &
+## References
+
+[1] O. Ronneberger, P. Fischer, T. Brox. U-Net: Convolutional Networks for Biomedical Image Segmentation. MICCAI 2015.
+[2] K. He, X. Zhang, S. Ren, J. Sun. Deep Residual Learning for Image Recognition. CVPR 2016.
+[3] W. Shi et al. Real-Time Single Image and Video Super-Resolution Using an Efficient Sub-Pixel Convolutional Neural Network (PixelShuffle). CVPR 2016.
+[4] X. Fu et al. Removing Rain from Single Images via a Deep Detail Network. CVPR 2017.
+[5] G. Hinton, O. Vinyals, J. Dean. Distilling the Knowledge in a Neural Network. arXiv:1503.02531, 2015.
+[6] X. Fu et al. Lightweight Pyramid Networks for Image Deraining. IEEE TNNLS, 2019.
+[7] B. Li et al. AOD-Net: All-in-One Dehazing Network. ICCV 2017.
+[8] S. W. Zamir et al. Restormer: Efficient Transformer for High-Resolution Image Restoration. CVPR 2022.
+[9] J. M. J. Valanarasu, R. Yasarla, V. M. Patel. TransWeather: Transformer-based Restoration of Images Degraded by Adverse Weather Conditions. CVPR 2022.
+[10] Y. Zhu et al. Learning Weather-General and Weather-Specific Features for Image Restoration Under Multiple Adverse Weather Conditions (WGWS-Net). CVPR 2023.
+[11] W. Qu et al. WeatherRemover: All-in-one Adverse Weather Removal with Multi-scale Feature Map Compression. arXiv:2604.06623, 2026.
+[12] Y. Wang et al. UCL-Dehaze: Toward Real-World Image Dehazing via Unsupervised Contrastive Learning. IEEE TIP 33:1361-1374, 2024.
+[13] W. Yang et al. Deep Joint Rain Detection and Removal from a Single Image (Rain100L/H). CVPR 2017.
+[14] H. Zhang, V. M. Patel. Density-aware Single Image De-raining using a Multi-stream Dense Network (Test1200). CVPR 2018.
+[15] S. W. Zamir et al. Multi-Stage Progressive Image Restoration (MPRNet). CVPR 2021. The Rain13K training and test protocol follows this work.
+[16] R. Li, L.-F. Cheong, R. T. Tan. Heavy Rain Image Restoration: Integrating Physics Model and Conditional Adversarial Learning (Outdoor-Rain). CVPR 2019.
+[17] B. Li et al. Benchmarking Single Image Dehazing and Beyond (RESIDE, RTTS). IEEE TIP 28:492-505, 2019.
+[18] Z. Wang et al. Image Quality Assessment: From Error Visibility to Structural Similarity. IEEE TIP 13(4):600-612, 2004.
+[19] Ultralytics. YOLO11 documentation. https://docs.ultralytics.com/models/yolo11
+
+BibTeX: [references.bib](references.bib).
+
+## Citation
+
+```bibtex
+@misc{lightderainnet2026,
+  title  = {LightDerainNet: A Single Lightweight Model for Real-Time Rain and Haze Removal},
+  author = {vic510},
+  year   = {2026},
+  url    = {https://github.com/vic510/derain}
+}
 ```
 
-Run all commands from the repo root.
-
-> **Path note:** OpenCV on Windows cannot read/write videos at non-ASCII paths. Keep videos and datasets under plain ASCII paths such as `D:\datasets\`. Image I/O already handles non-ASCII paths.
-
-## Modules
-
-| Module | Purpose |
-| --- | --- |
-| `derain/models.py` | Built-in lightweight model `LightDerainNet` (adjustable width/depth for structural-compression experiments) |
-| `derain/data.py` | Paired dataset loading (Rain100L/H, Rain200L/H, Rain1400, SPA-Data, ...; pairs by the number in the file name) |
-| `derain/metrics.py` | PSNR and SSIM (default: 8-bit quantized, computed on the Y channel) |
-| `derain/train.py` | Training; `--teacher` enables knowledge distillation, `--amp` mixed precision, `--converge` stops once validation PSNR plateaus |
-| `derain/evaluate.py` | Test-set quality evaluation; writes a per-image CSV and averages |
-| `derain/benchmark.py` | Model forward only: mean/median/p95 latency, FPS, peak GPU memory, GFLOPs |
-| `derain/video.py` | Full video pipeline: `sequential` (per-stage timings) and `pipelined` (CPU encode/decode overlapped with GPU inference) |
-| `derain/export_onnx.py` | ONNX export for TensorRT `trtexec` |
-| `derain/report.py` | Turns results into Markdown tables |
-| `derain/synth.py` | Synthetic rain images/videos, **for smoke tests only; do not report these results** |
-| `tools/downstream_det.py` | Downstream detection metric (YOLO11s pseudo-labels from clean GT: mAP50, mAP50-95, recall) |
-| `tools/compare_sota.py` | Quality + 720p latency of external models (Restormer, TransWeather, WGWS-Net, WeatherRemover) with the same metrics |
-| `tools/haze_eval.py`, `tools/cascade_eval.py` | Pure-haze evaluation (RESIDE-6K) and derain->dehaze cascade baselines |
-| `tools/visual_compare.py`, `tools/draw_arch.py` | Visual comparison figure; architecture diagram |
-
-## Dataset
-
-Rain13K goes in `../datasets/Rain13K` and is downloaded by `tools/fetch_rain13k.py`.
-The source is the unofficial Hugging Face mirror `dronefreak/Rain13K` (license marked unknown); use it for academic purposes only and cite the original papers.
-Anonymous downloads run at roughly 4 files per second, about 36,000 files in total, so expect 2-3 hours.
-
-`tools/train_after_download.sh` waits for the download to finish, checks the pair counts, then starts training `runs/light32` automatically.
-
-## Typical workflow
-
-```powershell
-# 0. Smoke test (no dataset needed)
-python -m derain.synth dataset --out data/smoke --n 40 --size 128
-python -m derain.train --train-root data/smoke/train --val-root data/smoke/test --iters 200 --val-every 100 --batch 4 --patch 96 --workers 0 --out runs/smoke
-
-# 1. Train the baseline (Rain200L as an example)
-python -m derain.train --train-root D:/datasets/Rain200L/train --val-root D:/datasets/Rain200L/test --amp --out runs/light32
-
-# 2. Quality evaluation (FP32 and FP16, to compare the quality impact of precision)
-python -m derain.evaluate --ckpt runs/light32/best.pt --data D:/datasets/Rain200L/test --precision fp32 --tag B-fp32
-python -m derain.evaluate --ckpt runs/light32/best.pt --data D:/datasets/Rain200L/test --precision fp16 --tag D-fp16
-
-# 3. Model latency (several resolutions x precisions)
-python -m derain.benchmark --ckpt runs/light32/best.pt --size 480x640 720x1280 --precision fp32 fp16 --tag B
-python -m derain.benchmark --ckpt runs/light32/best.pt --size 720x1280 --precision fp16 --channels-last --cudnn-benchmark --tag C
-
-# 4. Structural compression: width-16 student + knowledge distillation
-python -m derain.train ... --width 16 --teacher runs/light32/best.pt --kd-weight 0.5 --out runs/light16_kd
-
-# 5. Full video pipeline
-python -m derain.video --ckpt runs/light32/best.pt --input D:/videos/rain.mp4 --mode sequential --tag V-seq
-python -m derain.video --ckpt runs/light32/best.pt --input D:/videos/rain.mp4 --mode pipelined --precision fp16 --output D:/videos/out.mp4 --side-by-side --tag V-pipe
-
-# 6. Summarize into tables
-python -m derain.report --results results > results/summary.md
-```
-
-## External models (DRSformer, SSDRNet, ...)
-
-External models are not reimplemented here; they are loaded straight from their official repos so they match the published implementation. Example with DRSformer:
-
-```powershell
-git clone https://github.com/cschenxiang/DRSformer D:/repos/DRSformer
-# download the pretrained weights following that repo's README first
-python -m derain.benchmark --ext-repo D:/repos/DRSformer --ext-module basicsr.models.archs.DRSformer_arch --ext-class DRSformer --ext-weights D:/repos/DRSformer/pretrained_models/xxx.pth --size 480x640 --precision fp32 fp16 --tag DRSformer
-```
-
-`--ext-kwargs` passes constructor arguments as JSON. Common keys such as `params` and `state_dict` in the weights file are unwrapped automatically.
-The external repo may need extra dependencies (see its README). DRSformer can run out of memory at high resolution on 4 GB of VRAM; the run is recorded as `OOM` instead of crashing.
-
-## Measurement rules (state these when reporting)
-
-- **Model latency:** batch=1, fixed size, 20 warm-up runs then 100 timed runs, each timed with CUDA events and synchronized; report median and p95. Excludes file I/O and encode/decode.
-- **Full pipeline:** in `sequential`, latency is the time from reading a frame to writing it. In `pipelined`, it is the time from when the frame is read to when it is written, including queueing. Throughput = frames / total time.
-  - When testing `pipelined` on a video file, reading is much faster than a real camera, so frames pile up in the queue and latency is overestimated. Use `--pace` to feed frames at the source frame rate to get camera-scenario latency.
-  - Measure throughput (maximum processing speed) without `--pace` and latency (camera scenario) with `--pace`; report them separately.
-- **Quality:** output is quantized to 8-bit and measured on the Y channel, no border crop by default. Numbers using RGB or a crop are not directly comparable with other settings.
-- FP16 changes numeric values, so re-evaluate quality; do not judge by speed alone.
+See also [CITATION.cff](CITATION.cff). Code is released under the [MIT License](LICENSE); datasets and third-party models keep their own licenses.

@@ -1,0 +1,9 @@
+cff-version: 1.2.0
+message: "If you use this code, please cite it as below."
+title: "LightDerainNet: A Single Lightweight Model for Real-Time Rain and Haze Removal"
+type: software
+authors:
+  - alias: "vic510"
+repository-code: "https://github.com/vic510/derain"
+license: MIT
+date-released: "2026-11-25"
