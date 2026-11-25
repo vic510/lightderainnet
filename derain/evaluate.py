@@ -1,6 +1,6 @@
-"""在成對測試集上計算 PSNR / SSIM。
+"""Computes PSNR / SSIM on a paired test set.
 
-範例：
+Example:
   python -m derain.evaluate --ckpt runs/light32/best.pt --data D:/datasets/Rain100L/test --precision fp32
 """
 import argparse
@@ -45,15 +45,15 @@ def summarize(rows):
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     add_model_args(p)
-    p.add_argument("--data", required=True, help="測試集根目錄（內含 rain/ 與 norain/ 等）")
+    p.add_argument("--data", required=True, help="test set root (containing rain/ and norain/ etc.)")
     p.add_argument("--rain-dir")
     p.add_argument("--clean-dir")
     p.add_argument("--precision", default="fp32", choices=list(DTYPES))
-    p.add_argument("--rgb", action="store_true", help="改在 RGB 計算（預設 Y 通道）")
-    p.add_argument("--crop", type=int, default=0, help="計算指標前裁掉的邊界像素")
-    p.add_argument("--save-images", help="輸出去雨結果的資料夾")
-    p.add_argument("--out", default="results", help="結果輸出資料夾")
-    p.add_argument("--tag", default="", help="實驗代號，例如 B-fp32")
+    p.add_argument("--rgb", action="store_true", help="compute on RGB (default: Y channel)")
+    p.add_argument("--crop", type=int, default=0, help="border pixels to crop before computing metrics")
+    p.add_argument("--save-images", help="folder to write derained images to")
+    p.add_argument("--out", default="results", help="results output folder")
+    p.add_argument("--tag", default="", help="experiment tag, e.g. B-fp32")
     args = p.parse_args()
 
     model, model_info = load_model(args)

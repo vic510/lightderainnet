@@ -1,11 +1,11 @@
-"""動態影像（影片）逐幀去雨，量測完整流程的 FPS 與端到端延遲。
+"""Frame-by-frame video deraining; measures full-pipeline FPS and end-to-end latency.
 
-兩種模式：
-  sequential  讀取 → 前處理 → 推論 → 後處理 → 寫出，一幀做完才做下一幀；並記錄各階段耗時。
-  pipelined   讀檔與寫檔各用一條執行緒，與 GPU 推論重疊（CPU/GPU 平行），量測吞吐量提升。
-前後處理（uint8→float、BGR→RGB、正規化）都在 GPU 上做，CPU 只負責編解碼。
+Two modes:
+  sequential  read -> preprocess -> inference -> postprocess -> write, one frame at a time; per-stage timings are recorded.
+  pipelined   reading and writing each run in their own thread, overlapping with GPU inference (CPU/GPU parallelism); measures the throughput gain.
+Pre/post-processing (uint8->float, BGR->RGB, normalization) runs on the GPU; the CPU only does encode/decode.
 
-範例：
+Example:
   python -m derain.video --ckpt runs/light32/best.pt --input rainy.mp4 --output derained.mp4 --mode pipelined --precision fp16
 """
 import argparse
@@ -30,12 +30,12 @@ _STOP = object()
 def open_video(src):
     cap = cv2.VideoCapture(int(src) if str(src).isdigit() else str(src))
     if not cap.isOpened():
-        raise IOError(f"無法開啟影片 {src}（OpenCV 在 Windows 可能不支援含中文的路徑，請改放英文路徑）")
+        raise IOError(f"Cannot open video {src} (OpenCV on Windows may not support non-ASCII paths; use an ASCII path)")
     return cap
 
 
 class Processor:
-    """GPU 端前處理 + 推論 + 後處理。"""
+    """GPU-side preprocessing + inference + postprocessing."""
 
     def __init__(self, model, device, dtype, pad, resize=None):
         self.model, self.device, self.dtype, self.pad, self.resize = model, device, dtype, pad, resize
@@ -104,7 +104,7 @@ def run_pipelined(cap, proc, writer_factory, max_frames, side_by_side, qsize, pa
     def reader():
         n, t0 = 0, time.perf_counter()
         while n < max_frames:
-            if pace_fps:  # 模擬攝影機：第 n 幀要等到 n/fps 秒才「拍到」
+            if pace_fps:  # simulate a camera: frame n is only "captured" at n/fps seconds
                 time.sleep(max(0.0, t0 + n / pace_fps - time.perf_counter()))
             ok, frame = cap.read()
             if not ok:
@@ -122,7 +122,7 @@ def run_pipelined(cap, proc, writer_factory, max_frames, side_by_side, qsize, pa
                 if state["writer"] is not None:
                     state["writer"].write(frame_out)
                 latencies.append((time.perf_counter() - t_read) * 1000)
-        except Exception as e:  # 記下錯誤給主執行緒，並繼續清空佇列避免主執行緒卡住
+        except Exception as e:  # record the error for the main thread and keep draining the queue so the main thread does not block
             state["error"] = e
             while q_out.get() is not _STOP:
                 pass
@@ -153,17 +153,17 @@ def stats(xs):
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     add_model_args(p)
-    p.add_argument("--input", required=True, help="影片檔或攝影機編號（如 0）")
-    p.add_argument("--output", help="輸出影片（.mp4）；不給則只量測不存檔")
+    p.add_argument("--input", required=True, help="video file or camera index (e.g. 0)")
+    p.add_argument("--output", help="output video (.mp4); if omitted, only measure without saving")
     p.add_argument("--mode", default="pipelined", choices=["sequential", "pipelined"])
     p.add_argument("--precision", default="fp32", choices=list(DTYPES))
-    p.add_argument("--resize", help="推論前縮放為 HxW，例如 720x1280")
+    p.add_argument("--resize", help="resize to HxW before inference, e.g. 720x1280")
     p.add_argument("--max-frames", type=int, default=10 ** 9)
-    p.add_argument("--warmup", type=int, default=10, help="正式量測前先用第一幀暖機的次數")
-    p.add_argument("--queue", type=int, default=4, help="pipelined 模式佇列長度")
+    p.add_argument("--warmup", type=int, default=10, help="number of warm-up runs on the first frame before measuring")
+    p.add_argument("--queue", type=int, default=4, help="queue length in pipelined mode")
     p.add_argument("--pace", action="store_true",
-                   help="pipelined 模式依來源幀率送幀（模擬攝影機），延遲才不會包含檔案讀太快造成的排隊")
-    p.add_argument("--side-by-side", action="store_true", help="輸出左右對照（原始 | 去雨）")
+                   help="in pipelined mode, feed frames at the source frame rate (simulating a camera) so latency does not include queueing caused by reading the file too fast")
+    p.add_argument("--side-by-side", action="store_true", help="write a side-by-side output (original | derained)")
     p.add_argument("--out", default="results/videos.jsonl")
     p.add_argument("--tag", default="")
     args = p.parse_args()
@@ -177,7 +177,7 @@ def main():
     src_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
     ok, first = cap.read()
     if not ok:
-        raise IOError("影片沒有任何幀")
+        raise IOError("The video has no frames")
     for _ in range(args.warmup):
         proc(first)
     cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
@@ -188,7 +188,7 @@ def main():
         Path(args.output).parent.mkdir(parents=True, exist_ok=True)
         w = cv2.VideoWriter(args.output, cv2.VideoWriter_fourcc(*"mp4v"), src_fps, (shape[1], shape[0]))
         if not w.isOpened():
-            raise IOError(f"無法建立輸出影片 {args.output}")
+            raise IOError(f"Cannot create output video {args.output}")
         return w
 
     if args.mode == "sequential":
@@ -206,7 +206,7 @@ def main():
         "wall_time_s": round(wall, 3), "throughput_fps": round(n / wall, 2) if wall else None,
         "end_to_end_latency_ms": stats(lat),
         "stage_ms": {k: stats(v) for k, v in timings.items()} if timings else None,
-        "realtime": (n / wall) >= 0.98 * src_fps if wall else None,  # 容許 --pace 時的計時誤差
+        "realtime": (n / wall) >= 0.98 * src_fps if wall else None,  # tolerate timing error when using --pace
         "timing": "sequential: read→write per frame; pipelined: read timestamp→written, includes queueing",
         "env": env_info(args.device),
     }

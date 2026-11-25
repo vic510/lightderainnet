@@ -1,8 +1,8 @@
-"""成對去雨資料集（Rain13K、Rain100L/H、Rain200L/H、Rain1400、SPA-Data 等）。
+"""Paired deraining datasets (Rain13K, Rain100L/H, Rain200L/H, Rain1400, SPA-Data, etc.).
 
-資料夾結構：root/<rain 目錄>/... 與 root/<clean 目錄>/...（子資料夾會遞迴搜尋）。
-兩邊同名時直接以檔名配對；否則以檔名中的第一個數字配對，
-因此 rain-001.png ↔ norain-001.png、norain-1x2.png ↔ norain-1.png、1_3.jpg ↔ 1.jpg 都能對上。
+Layout: root/<rain dir>/... and root/<clean dir>/... (subfolders are searched recursively).
+Pairs by file name when both sides share it; otherwise by the first number in the name,
+so rain-001.png <-> norain-001.png, norain-1x2.png <-> norain-1.png, 1_3.jpg <-> 1.jpg all match.
 """
 import random
 import re
@@ -19,11 +19,11 @@ CLEAN_DIRS = ("norain", "target", "gt", "clean", "groundtruth")
 
 
 def read_image(path) -> np.ndarray:
-    """讀成 RGB uint8。用 imdecode 才能讀含中文的 Windows 路徑。"""
+    """Read as RGB uint8. imdecode is used so non-ASCII Windows paths work."""
     buf = np.fromfile(str(path), dtype=np.uint8)
     img = cv2.imdecode(buf, cv2.IMREAD_COLOR)
     if img is None:
-        raise IOError(f"無法讀取影像：{path}")
+        raise IOError(f"Cannot read image: {path}")
     return cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
 
@@ -32,7 +32,7 @@ def write_image(path, rgb: np.ndarray):
     path.parent.mkdir(parents=True, exist_ok=True)
     ok, buf = cv2.imencode(path.suffix or ".png", cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
     if not ok:
-        raise IOError(f"無法寫入影像：{path}")
+        raise IOError(f"Cannot write image: {path}")
     buf.tofile(str(path))
 
 
@@ -41,7 +41,7 @@ def to_tensor(rgb: np.ndarray) -> torch.Tensor:
 
 
 def to_uint8(t: torch.Tensor) -> np.ndarray:
-    """CHW [0,1] tensor -> HWC uint8。"""
+    """CHW [0,1] tensor -> HWC uint8."""
     return (t.clamp(0, 1) * 255.0).round().byte().permute(1, 2, 0).cpu().numpy()
 
 
@@ -49,7 +49,7 @@ def _find_dir(root: Path, names):
     for n in names:
         if (root / n).is_dir():
             return root / n
-    raise FileNotFoundError(f"{root} 下找不到 {names} 任一資料夾，請用 --rain-dir/--clean-dir 指定")
+    raise FileNotFoundError(f"None of the folders {names} found under {root}; specify them with --rain-dir/--clean-dir")
 
 
 def _list_images(d: Path):
@@ -66,13 +66,13 @@ def _index(paths, key):
     for p in paths:
         k = key(p)
         if k in out:
-            return None  # 有重複，這種鍵不能用來配對
+            return None  # duplicates exist, so this key cannot be used for pairing
         out[k] = p
     return out
 
 
 def find_pairs(root, rain_dir=None, clean_dir=None):
-    """優先用完整檔名配對（如 Rain13K 兩邊同名）；不行才用檔名中的第一個數字。"""
+    """Prefer pairing by full file name (e.g. Rain13K uses identical names); fall back to the first number in the name."""
     root = Path(root)
     rd = root / rain_dir if rain_dir else _find_dir(root, RAIN_DIRS)
     cd = root / clean_dir if clean_dir else _find_dir(root, CLEAN_DIRS)
@@ -82,7 +82,7 @@ def find_pairs(root, rain_dir=None, clean_dir=None):
     if clean is None or not all(p.stem in clean for p in rain_imgs):
         clean, key = _index(clean_imgs, _image_id), _image_id
         if clean is None:
-            raise ValueError(f"{cd} 的乾淨影像檔名或編號有重複，無法配對")
+            raise ValueError(f"Clean image names or numbers in {cd} are duplicated; cannot pair")
     pairs, missing = [], []
     for p in rain_imgs:
         k = key(p)
@@ -91,9 +91,9 @@ def find_pairs(root, rain_dir=None, clean_dir=None):
         else:
             missing.append(p)
     if not pairs:
-        raise FileNotFoundError(f"{rd} 與 {cd} 之間沒有可配對的影像")
+        raise FileNotFoundError(f"No pairable images between {rd} and {cd}")
     if missing:
-        print(f"[警告] {len(missing)} 張雨圖找不到對應乾淨圖，已略過（例如 {missing[0].name}）")
+        print(f"[warning] {len(missing)} rain images have no matching clean image and were skipped (e.g. {missing[0].name})")
     return pairs
 
 
@@ -110,7 +110,7 @@ class PairedDataset(Dataset):
         rp, cp = self.pairs[i]
         rain, clean = read_image(rp), read_image(cp)
         if rain.shape != clean.shape:
-            raise ValueError(f"尺寸不一致：{rp.name} {rain.shape} vs {cp.name} {clean.shape}")
+            raise ValueError(f"Size mismatch: {rp.name} {rain.shape} vs {cp.name} {clean.shape}")
         if self.patch:
             rain, clean = self._random_crop(rain, clean, self.patch)
         if self.augment:

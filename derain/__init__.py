@@ -1,1 +1,1 @@
-"""GPU 加速影像去雨實驗工具。"""
+"""Tools for GPU-accelerated image deraining experiments."""

@@ -1,14 +1,14 @@
-"""PSNR / SSIM。
+"""PSNR / SSIM.
 
-預設採去雨文獻常見做法：輸出先量化成 8-bit，再於 YCbCr 的 Y 通道計算。
-報告時務必註明使用的設定（Y 或 RGB、是否裁邊），不同設定的數字不能直接比較。
+Follows common deraining practice: the output is first quantized to 8-bit, then measured on the Y channel of YCbCr.
+Always state the setting used (Y or RGB, border crop) when reporting; numbers from different settings are not directly comparable.
 """
 import torch
 import torch.nn.functional as F
 
 
 def rgb_to_y(img: torch.Tensor) -> torch.Tensor:
-    """BCHW、RGB、範圍 [0,1] -> B1HW 的 Y 通道（ITU-R BT.601，與 MATLAB rgb2ycbcr 相同）。"""
+    """BCHW, RGB, range [0,1] -> B1HW Y channel (ITU-R BT.601, same as MATLAB rgb2ycbcr)."""
     r, g, b = img[:, 0:1], img[:, 1:2], img[:, 2:3]
     return (16.0 + 65.481 * r + 128.553 * g + 24.966 * b) / 255.0
 
@@ -27,7 +27,7 @@ def _prepare(img, y_channel, crop):
 
 
 def psnr(pred, target, y_channel=True, crop=0):
-    """回傳每張影像的 PSNR (dB)，shape [B]。"""
+    """Per-image PSNR (dB), shape [B]."""
     p, t = _prepare(pred, y_channel, crop), _prepare(target, y_channel, crop)
     mse = ((p - t) ** 2).flatten(1).mean(1)
     return 10.0 * torch.log10(1.0 / mse.clamp_min(1e-12))
@@ -41,7 +41,7 @@ def _gaussian_window(size, sigma, channels, device, dtype):
 
 
 def ssim_map(p, t, window=11, sigma=1.5):
-    """Wang et al. 2004 的 SSIM（高斯視窗 11、sigma 1.5、K1=0.01、K2=0.03、資料範圍 1）。"""
+    """SSIM from Wang et al. 2004 (Gaussian window 11, sigma 1.5, K1=0.01, K2=0.03, data range 1)."""
     c = p.shape[1]
     w = _gaussian_window(window, sigma, c, p.device, p.dtype)
     conv = lambda x: F.conv2d(x, w, groups=c)  # noqa: E731
@@ -54,11 +54,11 @@ def ssim_map(p, t, window=11, sigma=1.5):
 
 
 def ssim(pred, target, y_channel=True, crop=0):
-    """回傳每張影像的 SSIM，shape [B]。"""
+    """Per-image SSIM, shape [B]."""
     p, t = _prepare(pred, y_channel, crop), _prepare(target, y_channel, crop)
     return ssim_map(p, t).flatten(1).mean(1)
 
 
 def ssim_loss(pred, target):
-    """訓練用：RGB、float32、可微分。"""
+    """For training: RGB, float32, differentiable."""
     return 1.0 - ssim_map(pred, target).mean()

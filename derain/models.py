@@ -1,6 +1,6 @@
-"""本專案自建的輕量去雨模型。
+"""Lightweight deraining model built for this project.
 
-外部模型（DRSformer、SSDRNet 等）不在此重寫，而是透過 common.load_model 從其官方程式庫載入。
+External models (DRSformer, SSDRNet, etc.) are not reimplemented here; they are loaded from their official repos via common.load_model.
 """
 import torch
 import torch.nn as nn
@@ -20,12 +20,12 @@ class ResBlock(nn.Module):
 
 
 class LightDerainNet(nn.Module):
-    """輕量 U 形殘差 CNN。
+    """Lightweight U-shaped residual CNN.
 
-    - 先以 PixelUnshuffle 降到 1/2 解析度再做卷積，大幅降低高解析度影片的運算量。
-    - 網路預測雨層 R，輸出 B = O - R（殘差學習，與多數去雨 CNN 相同）。
-    - width / blocks 可調，用來做「結構壓縮」實驗（例如 32→16 通道）。
-    輸入長寬需為 4 的倍數，推論時由 common.forward_padded 自動補齊。
+    - Downsamples to 1/2 resolution with PixelUnshuffle before convolving, greatly reducing compute for high-resolution video.
+    - The network predicts the rain layer R and outputs B = O - R (residual learning, as in most deraining CNNs).
+    - width / blocks are adjustable for structural-compression experiments (e.g. 32 -> 16 channels).
+    Input height and width must be multiples of 4; common.forward_padded pads automatically at inference.
     """
 
     def __init__(self, width: int = 32, blocks: int = 6):
@@ -56,5 +56,5 @@ ARCHS = {"light": LightDerainNet}
 
 def build_arch(arch: str, **kwargs) -> nn.Module:
     if arch not in ARCHS:
-        raise ValueError(f"未知架構 {arch}，可用：{list(ARCHS)}")
+        raise ValueError(f"Unknown architecture {arch}; available: {list(ARCHS)}")
     return ARCHS[arch](**kwargs)

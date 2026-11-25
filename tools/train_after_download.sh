@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# 等 Rain13K 下載程序結束 → 檢查配對 → 背景訓練 LightDerainNet w32。
-# 用法（在 code/ 下）：nohup bash tools/train_after_download.sh <下載程序 PID> > runs/light32_pipeline.log 2>&1 &
+# Wait for the Rain13K download to finish -> check pairs -> train LightDerainNet w32 in the background.
+# Usage (from the repo root): nohup bash tools/train_after_download.sh <download PID> > runs/light32_pipeline.log 2>&1 &
 set -euo pipefail
-PID=${1:?需要下載程序的 PID}
+PID=${1:?download process PID required}
 DATA=../datasets/Rain13K
 PY=.venv/bin/python
 
 while kill -0 "$PID" 2>/dev/null; do sleep 60; done
 if [ "$(grep -c '^DONE' ../datasets/download.log)" -lt 2 ]; then
-    echo "下載未完成（log 裡沒有兩個 DONE），不開始訓練"; exit 1
+    echo "Download incomplete (log does not contain two DONE lines); not starting training"; exit 1
 fi
 
 $PY - <<'EOF'

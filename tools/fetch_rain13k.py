@@ -1,12 +1,12 @@
-"""下載 Rain13K（Hugging Face 鏡像 dronefreak/Rain13K，非官方，授權標示 unknown，僅供學術使用並引用原始論文）。
+"""Downloads Rain13K (Hugging Face mirror dronefreak/Rain13K; unofficial, license marked unknown; academic use only, cite the original papers).
 
-資料夾保持鏡像原樣：train/{input,target}/part_*/ 與 test/<測試集>/{input,target}/。
-derain.data.find_pairs 會自動辨認 input/target 並遞迴搜尋 part_*，不需要再整理。
-（該鏡像的 parquet 自動轉檔是空的，所以只能逐檔下載。）
+The folder layout mirrors the source: train/{input,target}/part_*/ and test/<test set>/{input,target}/.
+derain.data.find_pairs auto-detects input/target and searches part_* recursively, so no reorganizing is needed.
+(The mirror's auto-converted parquet is empty, so files must be downloaded one by one.)
 
-用法：
-  python tools/fetch_rain13k.py --out ../datasets/Rain13K --part test    # 先抓測試集（約 4,300 對）
-  python tools/fetch_rain13k.py --out ../datasets/Rain13K --part train   # 訓練集（13,711 對）
+Usage:
+  python tools/fetch_rain13k.py --out ../datasets/Rain13K --part test    # test set first (about 4,300 pairs)
+  python tools/fetch_rain13k.py --out ../datasets/Rain13K --part train   # training set (13,711 pairs)
 """
 import argparse
 

@@ -1,8 +1,8 @@
-"""訓練自建輕量模型（可選知識蒸餾，用於結構壓縮實驗）。
+"""Trains the built-in lightweight model (optional knowledge distillation, for structural-compression experiments).
 
-範例：
+Example:
   python -m derain.train --train-root D:/datasets/Rain200L/train --val-root D:/datasets/Rain200L/test --out runs/light32
-  # 壓縮：寬度 16 的學生模型，以寬度 32 的模型為老師
+  # Compression: width-16 student model with a width-32 model as teacher
   python -m derain.train ... --width 16 --teacher runs/light32/best.pt --kd-weight 0.5 --out runs/light16_kd
 """
 import argparse
@@ -40,16 +40,16 @@ def main():
     p.add_argument("--batch", type=int, default=8)
     p.add_argument("--iters", type=int, default=50000)
     p.add_argument("--lr", type=float, default=2e-4)
-    p.add_argument("--ssim-weight", type=float, default=0.1, help="損失 = L1 + w·(1-SSIM)")
-    p.add_argument("--teacher", help="知識蒸餾老師模型 checkpoint")
+    p.add_argument("--ssim-weight", type=float, default=0.1, help="loss = L1 + w*(1-SSIM)")
+    p.add_argument("--teacher", help="teacher model checkpoint for knowledge distillation")
     p.add_argument("--kd-weight", type=float, default=0.5)
-    p.add_argument("--amp", action="store_true", help="混合精度訓練（較快、省記憶體）")
+    p.add_argument("--amp", action="store_true", help="mixed-precision training (faster, less memory)")
     p.add_argument("--workers", type=int, default=4)
     p.add_argument("--val-every", type=int, default=2000)
-    p.add_argument("--val-max", type=int, default=0, help="驗證最多用幾張（0=全部）")
+    p.add_argument("--val-max", type=int, default=0, help="max validation images (0 = all)")
     p.add_argument("--log-every", type=int, default=100)
     p.add_argument("--seed", type=int, default=0)
-    p.add_argument("--resume", help="從 last.pt 接續")
+    p.add_argument("--resume", help="resume from last.pt")
     p.add_argument("--out", required=True)
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     args = p.parse_args()
@@ -88,7 +88,7 @@ def main():
         json.dump({"args": vars(args), "model_cfg": model_cfg, "params": count_params(model),
                    "n_train": len(train_pairs), "n_val": len(val_pairs), "env": env_info(device)},
                   f, ensure_ascii=False, indent=2)
-    print(f"參數量 {count_params(model):,}；訓練 {len(train_pairs)} 對、驗證 {len(val_pairs)} 對")
+    print(f"Parameters: {count_params(model):,}; {len(train_pairs)} training pairs, {len(val_pairs)} validation pairs")
 
     def save(name, it):
         torch.save({"model_cfg": model_cfg, "state_dict": model.state_dict(), "optimizer": opt.state_dict(),
@@ -111,7 +111,7 @@ def main():
                 with torch.no_grad():
                     target_t = teacher(rain)
                 loss = loss + args.kd_weight * F.l1_loss(pred, target_t)
-        if args.ssim_weight > 0:  # SSIM 以 float32 計算較穩定
+        if args.ssim_weight > 0:  # SSIM is more stable in float32
             loss = loss + args.ssim_weight * ssim_loss(pred.float(), clean)
         opt.zero_grad(set_to_none=True)
         scaler.scale(loss).backward()

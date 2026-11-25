@@ -1,97 +1,95 @@
-# 去雨實驗程式（GPU 加速專題）
+# Derain: GPU-Accelerated Image Deraining Experiments
 
-影像去雨（derain）的 PyTorch 實驗程式：自建輕量模型訓練、知識蒸餾、PSNR/SSIM 評估、模型延遲量測、完整影片流程量測，以及 ONNX/TensorRT 匯出。
-所有結果都會連同硬體與軟體版本，自動寫進 `results/*.jsonl`，之後可以追溯。
+PyTorch experiment code for image deraining: training a lightweight model, knowledge distillation, PSNR/SSIM evaluation, model latency benchmarking, full video-pipeline measurement, and ONNX/TensorRT export. Every result is written to `results/*.jsonl` together with hardware and software versions, so it stays traceable.
 
-## 安裝
+## Install
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
-pip install torch --index-url https://download.pytorch.org/whl/cu130   # 依你的 CUDA 版本調整
+pip install torch --index-url https://download.pytorch.org/whl/cu130   # adjust to your CUDA version
 pip install -r requirements.txt
 ```
 
-訓練要跑很久，建議用 `tmux` 或 `nohup`：
+Training takes a long time; use `tmux` or `nohup`:
 
 ```bash
 nohup python -m derain.train ... --out runs/light32 > runs/light32.log 2>&1 &
 ```
 
-以下指令都在 `code/` 目錄下執行。
+Run all commands from the repo root.
 
-> **路徑注意**：OpenCV 在 Windows 上讀寫影片時，不支援含中文的路徑。影片和資料集建議放在純英文路徑，例如 `D:\datasets\`。影像讀寫已經處理過中文路徑。
+> **Path note:** OpenCV on Windows cannot read/write videos at non-ASCII paths. Keep videos and datasets under plain ASCII paths such as `D:\datasets\`. Image I/O already handles non-ASCII paths.
 
-## 檔案
+## Modules
 
-| 模組 | 用途 |
+| Module | Purpose |
 | --- | --- |
-| `derain/models.py` | 自建輕量模型 `LightDerainNet`（寬度、深度可調，用來做結構壓縮實驗） |
-| `derain/data.py` | 成對資料集載入（Rain100L/H、Rain200L/H、Rain1400、SPA-Data 等，用檔名數字配對） |
-| `derain/metrics.py` | PSNR、SSIM（預設 8-bit 量化後在 Y 通道計算） |
-| `derain/train.py` | 訓練；`--teacher` 可做知識蒸餾，`--amp` 是混合精度 |
-| `derain/evaluate.py` | 測試集畫質評估，輸出每張圖的 CSV 和平均值 |
-| `derain/benchmark.py` | 只量模型 forward：mean/median/p95 延遲、FPS、峰值 GPU 記憶體、GFLOPs |
-| `derain/video.py` | 完整影片流程：`sequential`（含各階段耗時）和 `pipelined`（CPU 編解碼與 GPU 推論平行） |
-| `derain/export_onnx.py` | 匯出 ONNX，給 TensorRT `trtexec` 量測 |
-| `derain/report.py` | 把結果整理成 Markdown 表格 |
-| `derain/synth.py` | 產生合成雨圖和影片，**只用來確認程式能跑，結果不能寫進報告** |
+| `derain/models.py` | Built-in lightweight model `LightDerainNet` (adjustable width/depth for structural-compression experiments) |
+| `derain/data.py` | Paired dataset loading (Rain100L/H, Rain200L/H, Rain1400, SPA-Data, ...; pairs by the number in the file name) |
+| `derain/metrics.py` | PSNR and SSIM (default: 8-bit quantized, computed on the Y channel) |
+| `derain/train.py` | Training; `--teacher` enables knowledge distillation, `--amp` mixed precision |
+| `derain/evaluate.py` | Test-set quality evaluation; writes a per-image CSV and averages |
+| `derain/benchmark.py` | Model forward only: mean/median/p95 latency, FPS, peak GPU memory, GFLOPs |
+| `derain/video.py` | Full video pipeline: `sequential` (per-stage timings) and `pipelined` (CPU encode/decode overlapped with GPU inference) |
+| `derain/export_onnx.py` | ONNX export for TensorRT `trtexec` |
+| `derain/report.py` | Turns results into Markdown tables |
+| `derain/synth.py` | Synthetic rain images/videos, **for smoke tests only; do not report these results** |
 
-## 資料集
+## Dataset
 
-Rain13K 放在 `../datasets/Rain13K`，由 `tools/fetch_rain13k.py` 下載。
-來源是 Hugging Face 的非官方鏡像 `dronefreak/Rain13K`，授權標示為 unknown，只做學術使用，並引用原始論文。
-匿名下載大約每秒 4 個檔案，全部約 36,000 個檔案，需要 2～3 小時。
+Rain13K goes in `../datasets/Rain13K` and is downloaded by `tools/fetch_rain13k.py`.
+The source is the unofficial Hugging Face mirror `dronefreak/Rain13K` (license marked unknown); use it for academic purposes only and cite the original papers.
+Anonymous downloads run at roughly 4 files per second, about 36,000 files in total, so expect 2-3 hours.
 
-`tools/train_after_download.sh` 會等下載結束、檢查配對張數，再自動開始訓練 `runs/light32`。
-下載進度看 `../datasets/download.log`，訓練進度看 `runs/light32_pipeline.log`。
+`tools/train_after_download.sh` waits for the download to finish, checks the pair counts, then starts training `runs/light32` automatically.
 
-## 典型流程
+## Typical workflow
 
 ```powershell
-# 0. 煙霧測試（不需要資料集）
+# 0. Smoke test (no dataset needed)
 python -m derain.synth dataset --out data/smoke --n 40 --size 128
 python -m derain.train --train-root data/smoke/train --val-root data/smoke/test --iters 200 --val-every 100 --batch 4 --patch 96 --workers 0 --out runs/smoke
 
-# 1. 訓練自建 baseline（以 Rain200L 為例）
+# 1. Train the baseline (Rain200L as an example)
 python -m derain.train --train-root D:/datasets/Rain200L/train --val-root D:/datasets/Rain200L/test --amp --out runs/light32
 
-# 2. 畫質評估（FP32 與 FP16 各一次，比較精度造成的品質差異）
+# 2. Quality evaluation (FP32 and FP16, to compare the quality impact of precision)
 python -m derain.evaluate --ckpt runs/light32/best.pt --data D:/datasets/Rain200L/test --precision fp32 --tag B-fp32
 python -m derain.evaluate --ckpt runs/light32/best.pt --data D:/datasets/Rain200L/test --precision fp16 --tag D-fp16
 
-# 3. 模型延遲（多個解析度 × 精度）
+# 3. Model latency (several resolutions x precisions)
 python -m derain.benchmark --ckpt runs/light32/best.pt --size 480x640 720x1280 --precision fp32 fp16 --tag B
 python -m derain.benchmark --ckpt runs/light32/best.pt --size 720x1280 --precision fp16 --channels-last --cudnn-benchmark --tag C
 
-# 4. 結構壓縮：寬度 16 的學生模型 + 知識蒸餾
+# 4. Structural compression: width-16 student + knowledge distillation
 python -m derain.train ... --width 16 --teacher runs/light32/best.pt --kd-weight 0.5 --out runs/light16_kd
 
-# 5. 完整影片流程
+# 5. Full video pipeline
 python -m derain.video --ckpt runs/light32/best.pt --input D:/videos/rain.mp4 --mode sequential --tag V-seq
 python -m derain.video --ckpt runs/light32/best.pt --input D:/videos/rain.mp4 --mode pipelined --precision fp16 --output D:/videos/out.mp4 --side-by-side --tag V-pipe
 
-# 6. 整理成表格
+# 6. Summarize into tables
 python -m derain.report --results results > results/summary.md
 ```
 
-## 外部模型（DRSformer、SSDRNet 等）
+## External models (DRSformer, SSDRNet, ...)
 
-外部模型不在這裡重寫，而是從官方程式庫直接載入，確保它跟論文是同一份實作。以 DRSformer 為例：
+External models are not reimplemented here; they are loaded straight from their official repos so they match the published implementation. Example with DRSformer:
 
 ```powershell
 git clone https://github.com/cschenxiang/DRSformer D:/repos/DRSformer
-# 先依該 repo README 下載預訓練權重
+# download the pretrained weights following that repo's README first
 python -m derain.benchmark --ext-repo D:/repos/DRSformer --ext-module basicsr.models.archs.DRSformer_arch --ext-class DRSformer --ext-weights D:/repos/DRSformer/pretrained_models/xxx.pth --size 480x640 --precision fp32 fp16 --tag DRSformer
 ```
 
-`--ext-kwargs` 可以用 JSON 傳建構參數。權重檔裡的 `params`、`state_dict` 等常見鍵會自動解開。
-外部 repo 可能有額外的相依套件，需要依它的 README 安裝。DRSformer 在 4 GB VRAM 上跑高解析度時可能 OOM，程式會記錄成 `OOM`，不會中斷。
+`--ext-kwargs` passes constructor arguments as JSON. Common keys such as `params` and `state_dict` in the weights file are unwrapped automatically.
+The external repo may need extra dependencies (see its README). DRSformer can run out of memory at high resolution on 4 GB of VRAM; the run is recorded as `OOM` instead of crashing.
 
-## 量測規則（寫報告時請一併寫上）
+## Measurement rules (state these when reporting)
 
-- **模型延遲**：batch=1、固定尺寸、warm-up 20 次後量 100 次。每次用 CUDA Event 計時並同步，回報 median 與 p95。不含讀檔、編解碼。
-- **完整流程**：`sequential` 的延遲是一幀從讀取到寫出的時間。`pipelined` 是從讀到該幀、到寫出的時間，包含排隊。吞吐量 = 幀數 ÷ 總時間。
-  - 用影片檔測 `pipelined` 時，讀檔比真實攝影機快很多，幀會塞在佇列裡，延遲因此被高估。這種情況用 `--pace` 依來源幀率送幀，量到的才是攝影機情境的延遲。
-  - 吞吐量（最多能處理多快）不加 `--pace`；延遲（攝影機情境）加 `--pace`。兩者分開報告。
-- **畫質**：輸出先量化成 8-bit，在 Y 通道計算，預設不裁邊。換成 RGB 或裁邊的數字，不能跟其他設定直接比較。
-- FP16 會改變數值，所以要重新評估畫質，不能只看速度。
+- **Model latency:** batch=1, fixed size, 20 warm-up runs then 100 timed runs, each timed with CUDA events and synchronized; report median and p95. Excludes file I/O and encode/decode.
+- **Full pipeline:** in `sequential`, latency is the time from reading a frame to writing it. In `pipelined`, it is the time from when the frame is read to when it is written, including queueing. Throughput = frames / total time.
+  - When testing `pipelined` on a video file, reading is much faster than a real camera, so frames pile up in the queue and latency is overestimated. Use `--pace` to feed frames at the source frame rate to get camera-scenario latency.
+  - Measure throughput (maximum processing speed) without `--pace` and latency (camera scenario) with `--pace`; report them separately.
+- **Quality:** output is quantized to 8-bit and measured on the Y channel, no border crop by default. Numbers using RGB or a crop are not directly comparable with other settings.
+- FP16 changes numeric values, so re-evaluate quality; do not judge by speed alone.

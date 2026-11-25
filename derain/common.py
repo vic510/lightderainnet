@@ -1,4 +1,4 @@
-"""模型載入、推論與環境紀錄的共用函式。"""
+"""Shared helpers for model loading, inference and environment logging."""
 import argparse
 import datetime
 import importlib
@@ -16,17 +16,17 @@ from .models import build_arch
 
 
 def add_model_args(p: argparse.ArgumentParser):
-    g = p.add_argument_group("模型（三擇一：--ckpt、--arch、--ext-*）")
-    g.add_argument("--ckpt", help="本專案 train.py 產生的 checkpoint (.pt)")
-    g.add_argument("--arch", default="light", help="未給 --ckpt 時建立的自建架構（隨機權重，只適合測速）")
+    g = p.add_argument_group("Model (choose one: --ckpt, --arch, --ext-*)")
+    g.add_argument("--ckpt", help="checkpoint (.pt) produced by this project's train.py")
+    g.add_argument("--arch", default="light", help="built-in architecture used when --ckpt is not given (random weights; only suitable for speed tests)")
     g.add_argument("--width", type=int, default=32)
     g.add_argument("--blocks", type=int, default=6)
-    g.add_argument("--ext-repo", help="外部模型程式庫路徑，例如 git clone 下來的 DRSformer")
-    g.add_argument("--ext-module", help="模組路徑，例如 basicsr.models.archs.DRSformer_arch")
-    g.add_argument("--ext-class", help="類別名稱，例如 DRSformer")
-    g.add_argument("--ext-kwargs", default="{}", help="建構參數（JSON）")
-    g.add_argument("--ext-weights", help="外部模型權重檔")
-    g.add_argument("--pad-multiple", type=int, default=8, help="推論前將長寬補到此倍數")
+    g.add_argument("--ext-repo", help="path to an external model repo, e.g. a cloned DRSformer")
+    g.add_argument("--ext-module", help="module path, e.g. basicsr.models.archs.DRSformer_arch")
+    g.add_argument("--ext-class", help="class name, e.g. DRSformer")
+    g.add_argument("--ext-kwargs", default="{}", help="constructor kwargs (JSON)")
+    g.add_argument("--ext-weights", help="external model weights file")
+    g.add_argument("--pad-multiple", type=int, default=8, help="pad height and width to a multiple of this before inference")
     g.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
 
 
@@ -46,7 +46,7 @@ def load_checkpoint_model(path, device="cpu"):
 
 
 def load_model(args):
-    """依命令列參數建立模型，回傳 (model, info)。info 會寫進結果檔以便追溯。"""
+    """Build the model from CLI arguments and return (model, info). info is written to the results file for traceability."""
     device = args.device
     if args.ckpt:
         return load_checkpoint_model(args.ckpt, device)
